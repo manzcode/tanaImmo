@@ -98,3 +98,48 @@ export function ListingList({ city }) {
 | C6 | Aucun contrôle métier : on ne vérifie pas que la réservation existe, qu'elle attend un paiement, ni que le montant est le bon. Un vieil événement peut repasser à « paid » une réservation annulée ou remboursée. | Moyenne | `UPDATE … WHERE id = $1 AND status = 'pending_payment' AND amount = $2 AND currency = $3`. Si aucune ligne n'est modifiée : log d'erreur pour une vérification manuelle. |
 
 ---
+
+## Partie 3 – Gestion d'incident
+
+### 3.1 – Vendredi 21h40 : 35 % d'erreurs 5xx, médiane à 9 s
+
+1. Je signale dans le canal de l'équipe que je prends l'incident.
+2. J'ouvre le site comme un client, pour voir ce qu'il voit.
+3. Dans le monitoring, je regarde :
+   - le nombre de requêtes par minute, comparé à d'habitude ;
+   - les routes qui renvoient des 5xx, et la latence par route ;
+   - le CPU et la mémoire de l'API ;
+   - les connexions PostgreSQL utilisées par rapport au maximum,
+     et les requêtes en cours (`pg_stat_activity`).
+4. Dans les logs, je cherche le type d'erreur le plus fréquent.
+
+**Hypothèses**
+
+1. **Trop de requêtes SQL** : avec le code de l'extrait B, chaque appel
+   fait 1 + 2N requêtes SQL, sans pagination. Le pic de trafic de la
+   campagne SMS de 21h30 multiplie ce nombre.
+2. **Connexions PostgreSQL saturées** : les requêtes attendent une
+   connexion libre (d'où les 9 s), puis expirent (d'où les 5xx).
+3. **CPU ou mémoire de l'API saturés.**
+4. **Bots ou exploitation de l'injection SQL** : je cherche dans les logs
+   des valeurs de `city` étranges et des IP très actives.
+
+**premier appel au client.** « Le site n'est pas mort, mais il est très lent et environ une visite sur trois échoue, à cause du pic de la campagne. Je travaille dessus maintenant. Pouvez-vous mettre en pause les prochains envois de SMS ? Je vous rappelle à 22h15 avec un point précis, même si ce n'est pas encore réglé. » Je ne promets pas d'heure de résolution.
+
+**21h45 – 22h15 : réduire l'impact sans attendre la cause exacte (du plus sûr au plus risqué).**
+1. Pause des envois de SMS restants : la charge arrête de monter.
+2. Ajouter des instances de l'API **seulement si** la base n'est pas le goulot. Sinon, plus d'instances = plus de connexions = pire.
+3. Correctif minimal et réversible : `LIMIT 20` sur la requête de l'extrait B. Une ligne, testée en préproduction, déployée avec un retour arrière prêt. Le N+1 passe de 601 à 41 requêtes par appel.
+4. `statement_timeout` court sur PostgreSQL pour échouer vite au lieu de bloquer des connexions ; limite de débit par IP si des bots apparaissent.
+
+
+**Le lendemain.** Je déploie la vraie correction de l'extrait B (requête paramétrée, JOIN + `ANY`, pagination, index) après un test de charge (k6) qui rejoue le trafic de la campagne. Je vérifie les effets de bord : webhooks de paiement en échec, formulaires non transmis au CRM. J'écris un post-mortem sans reproche, partagé avec le client : chronologie, impact (durée, % de requêtes en échec), cause racine, ce qui a marché, actions avec un responsable et une date. Enfin, je propose une règle : l'équipe technique est prévenue 48 h avant chaque campagne, et les SMS partent par lots.
+
+### 3.2 – Alertes à mettre en place avant le lancement
+
+| Alerte | Seuil de déclenchement | Outil |
+|---|---|---|
+| Taux d'erreurs 5xx de l'API | > 2 % pendant 5 min (appel téléphonique si > 5 % pendant 2 min) | Grafana Cloud (métriques Prometheus de l'API) |
+| Latence p95 de `/api/listings` | > 1,5 s pendant 5 min : la lenteur arrive avant les erreurs | Grafana Cloud |
+| Saturation de PostgreSQL | connexions > 80 % du maximum, ou requêtes en attente d'une connexion du pool > 0 pendant 2 min | Grafana Cloud + postgres_exporter |
+| Sonde externe | accueil + `GET /api/listings?city=Antananarivo` chaque minute depuis 2 régions : 2 échecs de suite | Better Stack (ou UptimeRobot) |
