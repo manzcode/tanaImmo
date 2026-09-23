@@ -1,16 +1,14 @@
-import crypto from "node:crypto";
+const crypto = require("node:crypto");
+const express = require("express");
+const { markBookingAsPaid } = require("../services/paymentService");
+const { sendEmail, buildReceipt } = require("../email"); // mêmes modules que dans l'extrait d'origine
+const { crm } = require("../crm");
 
-export async function markBookingAsPaid(bookingId) {
-  const result = await db.query(
-    "UPDATE bookings SET status = 'paid' WHERE id = $1 AND status = 'pending_payment'",
-    [bookingId],
-  );
-  return result.rowCount === 1;
-}
+const router = express.Router();
 
 // express.raw() garde le corps brut (Buffer) : la signature est calculée sur ces octets exacts.
 // Si l'app utilise déjà app.use(express.json()), il faut déclarer cette route AVANT.
-app.post("/webhooks/payment", express.raw({ type: "application/json" }), async (req, res, next) => {
+router.post("/webhooks/payment", express.raw({ type: "application/json" }), async (req, res, next) => {
   // 1. L'appel vient-il vraiment du prestataire ? On recalcule la signature et on compare.
   const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
   const expected = crypto.createHmac("sha256", process.env.PAYMENT_WEBHOOK_SECRET).update(body).digest();
@@ -51,4 +49,4 @@ app.post("/webhooks/payment", express.raw({ type: "application/json" }), async (
   );
 });
 
-export default router;
+module.exports = router;
