@@ -1,6 +1,5 @@
-const PAGE_SIZE = 20;
 
-export async function getListingsByCity(city, page, pageSize) {
+async function getListingsByCity(city, page, pageSize) {
   const listings = await db.query(
     `SELECT l.id, l.title, l.price, l.city,
             a.id AS agency_id, a.name AS agency_name
@@ -34,21 +33,4 @@ export async function getListingsByCity(city, page, pageSize) {
   }));
 }
 
-app.get("/api/listings", async (req, res, next) => {
-  const { city } = req.query;
-  const page = Number(req.query.page ?? 1);
-
-  if (typeof city !== "string" || city.trim() === "" || city.length > 100) {
-    return res.status(400).json({ error: "Le paramètre city est obligatoire" });
-  }
-  if (!Number.isInteger(page) || page < 1 || page > 100) {
-    return res.status(400).json({ error: "Le paramètre page doit être un entier entre 1 et 100" });
-  }
-
-  try {
-    const listings = await getListingsByCity(city.trim(), page, PAGE_SIZE);
-    res.json(listings);
-  } catch (error) {
-    next(error); 
-  }
-});
+module.exports = { getListingsByCity };
